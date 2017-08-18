@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 from flask import Flask, jsonify, request
-
+from models import *
+from core import db
 import pprint
-import time
 
 app = Flask(__name__)
 
@@ -139,57 +139,74 @@ Response:
 @app.route('/scrobble/pause', methods=['POST'])
 @app.route('/scrobble/stop', methods=['POST'])
 def scrobble():
-    pprint.pprint(request.json)
+    if 'episode' in request.json:
+        show = addShow(request.json['show'])
+        print(request.json['progress'])
+        addEpisode(json_request=request.json['episode'], show=show, progress=request.json.get('progress', None))
+        db.session.commit()
+    else:
+        raise NotImplemented
     return jsonify(request.json)
 
 '''
 Return the watched episodes
 
 Response:
-    TODO
+    [ {
+       "plays": 1,
+       "last_watched_at": "2017-08-16T13:04:11.000Z",
+       "show": {
+         "title": "Scrubs",
+         "year": 2001,
+         "ids": {
+           "trakt": 1,
+           "tvdb": 76156,
+         }
+       },
+       "seasons": [
+         {
+           "number": 3,
+           "episodes": [
+             {
+               "ids": {
+                   "tvdb": 184651,
+               },
+               "number": 3,
+               "plays": 8,
+               "last_watched_at": "2017-08-16T13:04:11.000Z"
+             },
+           ]
+         },
+       ]
+     }
+     ]
+    ]
 '''
 @app.route('/sync/watched/shows')
 def watched_shows():
-    return jsonify([])
-    return jsonify([
-  {
-    "plays": 1,
-    "last_watched_at": "2017-08-16T13:04:11.000Z",
-    "show": {
-      "title": "Scrubs",
-      "year": 2001,
-      "ids": {
-        "trakt": 1,
-        "tvdb": 76156,
-      }
-    },
-    "seasons": [
-      {
-        "number": 3,
-        "episodes": [
-          {
-            "ids": {
-                "tvdb": 184651,
-            },
-            "number": 3,
-            "plays": 8,
-            "last_watched_at": "2017-08-16T13:04:11.000Z"
-          },
-        ]
-      },
-    ]
-  }
-  ])
+    episodes = db.aliased(Content)
+    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(True)).join(User).filter_by(username='kaos').all()
+    result=[]
+    for show in shows:
+        seasons = []
+        for episode in show.episodes.filter_by(contentType=ContentTypeEnum.episode, watched=True):
+            print(episode.watched)
+            seasonNumber = episode.json['season']
+            season = list(filter(lambda d: d['number'] == seasonNumber, seasons))
+            if not season:
+                season = [{'number': seasonNumber, 'episodes': []}]
+                seasons.append(season[0])
+            season[0]['episodes'].append(episode)
+
+        result.append({'show': show, 'seasons': seasons})
+
+    return jsonify(result)
 
 '''
 Return in progress episodes
 
 Response:
-    TODO
-'''
-@app.route('/sync/playback/episodes')
-def sync_episodes_progress():
-    return jsonify([
+    [
   {
     "progress": 75.2,
     "paused_at": "2015-01-25T22:01:32.000Z",
@@ -211,7 +228,19 @@ def sync_episodes_progress():
       }
     }
   }
-  ])
+  ]
+'''
+@app.route('/sync/playback/episodes')
+def sync_episodes_progress():
+    episodes = db.aliased(Content)
+    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(False)).join(User).filter_by(username='kaos')
+    result=[]
+    for show in shows.all():
+        for episode in show.episodes:
+            result.append({'show': show, 'episode': episode, 'type': 'episode', 'progress': episode.json['progress']})
+    pprint.pprint(result)
+    return jsonify(result)
+
 
 '''
 Return in progress movies
@@ -221,7 +250,8 @@ Response:
 '''
 @app.route('/sync/playback/movies')
 def sync_movies_progress():
-    return jsonify([])
+    contents = Content.query.filter_by(watched=False, contentType=ContentTypeEnum.movie).join(User).filter_by(username='kaos').all()
+    return jsonify(contents)
 
 '''
 Retrieve user settings
@@ -237,7 +267,7 @@ def settings():
 Receive collection to sync
 
 Parameters:
-    a dictionary containg 'shows' and 'movies' keys
+    a list of dictionary containg 'shows' and 'movies' keys
     TODO
 
 Response:
@@ -272,4 +302,65 @@ def catch_all(path):
     raise NotImplemented
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test.db'
+    app.json_encoder = CustomJSONEncoder
+    db.init_app(app)
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        user = User('kaos')
+        db.session.add(user)
+        db.session.flush()
+
+        def addUniqueId(value, source):
+            id = UniqueId.query.filter_by(source=source, value=int(value)).first()
+            if id:
+                return id
+            result = UniqueId(value=value, source=source)
+            db.session.flush()
+            return result
+
+        def addShow(json_request):
+            ids = []
+            show = None
+            for source, value in json_request['ids'].items():
+                ids.append(addUniqueId(value=value, source=source))
+                if ids[-1].content:
+                    show = ids[-1].content
+            if show:
+                show.json = {i:json_request[i] for i in json_request if i!='ids'}
+            else:
+                show = Content(json={i:json_request[i] for i in json_request if i!='ids'}, contentType=ContentTypeEnum.show, watched=True, user_id=user.id)
+            for id in ids:
+                show.uniqueIds.append(id)
+            db.session.add(show)
+            db.session.flush()
+            return show
+
+        def addEpisode(json_request, show, progress=None):
+            if progress > 99.9:
+                progress = None
+            if progress:
+                json_request.update({'progress':progress})
+            ids = []
+            episode = None
+            for source, value in json_request['ids'].items():
+                if type(value) == dict:
+                    for source, value in value.items():
+                        ids.append(addUniqueId(value=value, source=source))
+                        if ids[-1].content:
+                            episode = ids[-1].content
+            if episode:
+                episode.json = {i:json_request[i] for i in json_request if i!='ids'}
+                episode.watched = not progress
+            else:
+                episode = Content(json={i:json_request[i] for i in json_request if i!='ids'}, contentType=ContentTypeEnum.episode, watched=not progress, user_id=user.id, show=show)
+                episode.show_id = show.id
+            for id in ids:
+                episode.uniqueIds.append(id)
+            db.session.add(episode)
+            db.session.flush()
+            return episode
+
+        db.session.commit()
+        app.run(debug=True)
