@@ -1,11 +1,41 @@
 #!/usr/bin/env python3
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template, redirect
 from models import *
 from core import db
 import pprint
+from functools import wraps
 
 app = Flask(__name__)
+
+def required_roles():
+    def wrapper(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            try:
+                authorization = request.headers.get('Authorization').split(" ")[1]
+                user_token = Token.query.filter_by(access_token=authorization).first()
+                if not user_token:
+                    dsfsdf
+            except:
+                return "", 403
+            return f(user_token, *args, **kwargs)
+        return wrapped
+    return wrapper
+@app.route('/register')
+def redirect_register():
+    return redirect("/static/register.html", code=302)
+
+@app.route('/register', methods=['POST'])
+def register():
+    user_token = Token.query.filter_by(user_code=request.form['user_code']).first()
+    if user_token:
+        user_token.user = addUser(username=request.form['username'])
+        db.session.add(user_token)
+        db.session.commit()
+        return "OK"
+    else:
+        return "Unknown user code"
 
 '''
 Start authorization for a device
@@ -26,11 +56,13 @@ Response:
 '''
 @app.route('/oauth/device/code', methods=['POST'])
 def code():
-    pprint.pprint(request.json)
+    token = Token()
+    db.session.add(token)
+    db.session.commit()
     return jsonify({
-        "device_code":"9fe6e70693bd0cd0d170be4bafc155e142110a138ee5dfc7b78682c58aa88a67",
-        "user_code":"096B1193",
-        "verification_url":"http://127.0.0.1:5000/",
+        "device_code":token.access_token,
+        "user_code": token.user_code,
+        "verification_url":"http://127.0.0.1:5000/register",
         "expires_in":600,
         "interval":5
     })
@@ -59,16 +91,26 @@ Response:
 '''
 @app.route('/oauth/device/token', methods=['POST'])
 def device_token():
-    pprint.pprint(request.json)
-    # return jsonify({}), 400
-    return jsonify({
-      "access_token": "dbaf9757982a9e738f05d249b7b5b4a266b3a139049317c4909f2f263572c781",
-      "token_type": "bearer",
-      "expires_in": 7200,
-      "refresh_token": "76ba4c5c75c96f6087f58a4de10be6c00b29ea1ddc3b2022ee2016d1363e3a7c",
-      "scope": "public",
-      "created_at": int(time.time())
-    })
+    token = Token.query.filter_by(access_token=request.json['code']).first()
+    if token:
+        if token.user:
+            print(token.user_id)
+            token.renew()
+            db.session.add(token)
+            db.session.commit()
+            print("access_token:", token.access_token)
+            return jsonify({
+              "access_token": token.access_token,
+              "token_type": "bearer",
+              "expires_in": 518400,
+              "refresh_token": token.refresh_token,
+              "scope": "public",
+              "created_at": int(token.created_at.timestamp())
+            })
+        else:
+            return jsonify({}), 400
+    else:
+        return jsonify({}), 404
 
 '''
 Refresh token
@@ -93,15 +135,18 @@ Response:
     }
 '''
 @app.route('/oauth/token', methods=['POST'])
-def refresh_token():
-    pprint.pprint(request.json)
+@required_roles()
+def refresh_token(user_token):
+    user_token.renew()
+    db.session.add(user_token)
+    db.session.commit()
     return jsonify({
-      "access_token": "dbaf9757982a9e738f05d249b7b5b4a266b3a139049317c4909f2f263572c781",
+      "access_token": user_token.access_token,
       "token_type": "bearer",
-      "expires_in": 7200,
-      "refresh_token": "76ba4c5c75c96f6087f58a4de10be6c00b29ea1ddc3b2022ee2016d1363e3a7c",
+      "expires_in": 518400,
+      "refresh_token": user_token.refresh_token,
       "scope": "public",
-      "created_at": int(time.time())
+      "created_at": int(user_token.created_at.timestamp())
     })
 
 '''
@@ -138,11 +183,12 @@ Response:
 @app.route('/scrobble/start', methods=['POST'])
 @app.route('/scrobble/pause', methods=['POST'])
 @app.route('/scrobble/stop', methods=['POST'])
-def scrobble():
+@required_roles()
+def scrobble(user_token):
     if 'episode' in request.json:
-        show = addShow(request.json['show'])
+        show = addShow(user=user_token.user, json_request=request.json['show'])
         print(request.json['progress'])
-        addEpisode(json_request=request.json['episode'], show=show, progress=request.json.get('progress', None))
+        addEpisode(user=user_token.user, json_request=request.json['episode'], show=show, progress=request.json.get('progress', None))
         db.session.commit()
     else:
         raise NotImplemented
@@ -183,9 +229,10 @@ Response:
     ]
 '''
 @app.route('/sync/watched/shows')
-def watched_shows():
+@required_roles()
+def watched_shows(user_token):
     episodes = db.aliased(Content)
-    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(True)).join(User).filter_by(username='kaos').all()
+    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(True)).filter(episodes.user_id==user_token.user.id).all()
     result=[]
     for show in shows:
         seasons = []
@@ -231,14 +278,14 @@ Response:
   ]
 '''
 @app.route('/sync/playback/episodes')
-def sync_episodes_progress():
+@required_roles()
+def sync_episodes_progress(user_token):
     episodes = db.aliased(Content)
-    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(False)).join(User).filter_by(username='kaos')
+    shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(False)).filter(episodes.user_id==user_token.user.id)
     result=[]
     for show in shows.all():
         for episode in show.episodes:
             result.append({'show': show, 'episode': episode, 'type': 'episode', 'progress': episode.json['progress']})
-    pprint.pprint(result)
     return jsonify(result)
 
 
@@ -249,8 +296,9 @@ Response:
     TODO
 '''
 @app.route('/sync/playback/movies')
-def sync_movies_progress():
-    contents = Content.query.filter_by(watched=False, contentType=ContentTypeEnum.movie).join(User).filter_by(username='kaos').all()
+@required_roles()
+def sync_movies_progress(user_token):
+    contents = Content.query.filter_by(watched=False, contentType=ContentTypeEnum.movie).filter(episodes.user_id==user_token.user.id).all()
     return jsonify(contents)
 
 '''
@@ -260,8 +308,14 @@ Response:
     {}
 '''
 @app.route('/users/settings')
-def settings():
-    return jsonify({}), 403
+@required_roles()
+def settings(user_token):
+
+    return jsonify({
+                      "user": {
+                        "username": "justin",
+                        }
+                    })
 
 '''
 Receive collection to sync
@@ -275,8 +329,8 @@ Response:
 '''
 @app.route('/sync/collection', methods=['POST'])
 @app.route('/sync/history', methods=['POST'])
-def sync():
-    pprint.pprint(request.json)
+@required_roles()
+def sync(user_token):
     return jsonify(request.json)
 
 '''
@@ -288,7 +342,8 @@ Unimplemented, but for these routes we don't want to generate errors
 @app.route('/sync/collection/movies')
 @app.route('/sync/collection/shows')
 @app.route('/sync/watched/movies')
-def empty():
+@required_roles()
+def empty(user_token):
     return jsonify([])
 
 '''
@@ -308,59 +363,4 @@ if __name__ == '__main__':
     with app.app_context():
         db.drop_all()
         db.create_all()
-        user = User('kaos')
-        db.session.add(user)
-        db.session.flush()
-
-        def addUniqueId(value, source):
-            id = UniqueId.query.filter_by(source=source, value=int(value)).first()
-            if id:
-                return id
-            result = UniqueId(value=value, source=source)
-            db.session.flush()
-            return result
-
-        def addShow(json_request):
-            ids = []
-            show = None
-            for source, value in json_request['ids'].items():
-                ids.append(addUniqueId(value=value, source=source))
-                if ids[-1].content:
-                    show = ids[-1].content
-            if show:
-                show.json = {i:json_request[i] for i in json_request if i!='ids'}
-            else:
-                show = Content(json={i:json_request[i] for i in json_request if i!='ids'}, contentType=ContentTypeEnum.show, watched=True, user_id=user.id)
-            for id in ids:
-                show.uniqueIds.append(id)
-            db.session.add(show)
-            db.session.flush()
-            return show
-
-        def addEpisode(json_request, show, progress=None):
-            if progress > 99.9:
-                progress = None
-            if progress:
-                json_request.update({'progress':progress})
-            ids = []
-            episode = None
-            for source, value in json_request['ids'].items():
-                if type(value) == dict:
-                    for source, value in value.items():
-                        ids.append(addUniqueId(value=value, source=source))
-                        if ids[-1].content:
-                            episode = ids[-1].content
-            if episode:
-                episode.json = {i:json_request[i] for i in json_request if i!='ids'}
-                episode.watched = not progress
-            else:
-                episode = Content(json={i:json_request[i] for i in json_request if i!='ids'}, contentType=ContentTypeEnum.episode, watched=not progress, user_id=user.id, show=show)
-                episode.show_id = show.id
-            for id in ids:
-                episode.uniqueIds.append(id)
-            db.session.add(episode)
-            db.session.flush()
-            return episode
-
-        db.session.commit()
         app.run(debug=True)
