@@ -57,6 +57,7 @@ Response:
 '''
 @app.route('/oauth/device/code', methods=['POST'])
 def code():
+    app.logger.debug('Received authorization request')
     token = Token()
     db.session.add(token)
     db.session.commit()
@@ -92,14 +93,13 @@ Response:
 '''
 @app.route('/oauth/device/token', methods=['POST'])
 def device_token():
+    app.logger.debug('Received token request')
     token = Token.query.filter_by(access_token=request.json['code']).first()
     if token:
         if token.user:
-            print(token.user_id)
             token.renew()
             db.session.add(token)
             db.session.commit()
-            print("access_token:", token.access_token)
             return jsonify({
               "access_token": token.access_token,
               "token_type": "bearer",
@@ -138,6 +138,7 @@ Response:
 @app.route('/oauth/token', methods=['POST'])
 @required_roles()
 def refresh_token(user_token):
+    app.logger.debug('Received refresh token request')
     user_token.renew()
     db.session.add(user_token)
     db.session.commit()
@@ -186,12 +187,15 @@ Response:
 @app.route('/scrobble/stop', methods=['POST'])
 @required_roles()
 def scrobble(user_token):
+    app.logger.debug('Received scrobble request')
     if 'episode' in request.json:
         show = addShow(user=user_token.user, json_request=request.json['show'])
-        print(request.json['progress'])
+        app.logger.debug('Scrobble progress at %f', request.json.get('progress', .0))
         addEpisode(user=user_token.user, json_request=request.json['episode'], show=show, progress=request.json.get('progress', None))
+        app.logger.debug('Save progres')
         db.session.commit()
     else:
+        app.logger.warn('Scrobble request without episode data')
         raise NotImplemented
     return jsonify(request.json)
 
@@ -232,13 +236,13 @@ Response:
 @app.route('/sync/watched/shows')
 @required_roles()
 def watched_shows(user_token):
+    app.logger.debug('Received sync requeste')
     episodes = db.aliased(Content)
     shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(True)).filter(episodes.user_id==user_token.user.id).all()
     result=[]
     for show in shows:
         seasons = []
         for episode in show.episodes.filter_by(contentType=ContentTypeEnum.episode, watched=True):
-            print(episode.watched)
             seasonNumber = episode.json['season']
             season = list(filter(lambda d: d['number'] == seasonNumber, seasons))
             if not season:
@@ -281,6 +285,7 @@ Response:
 @app.route('/sync/playback/episodes')
 @required_roles()
 def sync_episodes_progress(user_token):
+    app.logger.debug('Received episode sync request')
     episodes = db.aliased(Content)
     shows = Content.query.filter_by(contentType=ContentTypeEnum.show).join(episodes, episodes.show_id == Content.id).filter_by(contentType=ContentTypeEnum.episode).filter(episodes.watched.is_(False)).filter(episodes.user_id==user_token.user.id)
     result=[]
@@ -299,6 +304,7 @@ Response:
 @app.route('/sync/playback/movies')
 @required_roles()
 def sync_movies_progress(user_token):
+    app.logger.debug('Received sync movie request')
     contents = Content.query.filter_by(watched=False, contentType=ContentTypeEnum.movie).filter(episodes.user_id==user_token.user.id).all()
     return jsonify(contents)
 
@@ -312,6 +318,7 @@ Response:
 @required_roles()
 def settings(user_token):
 
+    app.logger.debug('Received settings sync request')
     return jsonify({
                       "user": {
                         "username": "justin",
@@ -332,6 +339,7 @@ Response:
 @app.route('/sync/history', methods=['POST'])
 @required_roles()
 def sync(user_token):
+    app.logger.debug('Received sync data')
     return jsonify(request.json)
 
 '''
@@ -345,6 +353,7 @@ Unimplemented, but for these routes we don't want to generate errors
 @app.route('/sync/watched/movies')
 @required_roles()
 def empty(user_token):
+    app.logger.debug('Received sync request')
     return jsonify([])
 
 '''
@@ -353,8 +362,8 @@ Catcha all other routes for debug purpose
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def catch_all(path):
-    print("Unimplemented")
-    pprint.pprint(request.json)
+    app.logger.info('Unimplemented: %s', path)
+    app.logger.debug(request.json)
 
 if __name__ == '__main__':
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test.db'
