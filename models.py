@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask.json import JSONEncoder
 from core import db
+from sqlalchemy_enum34 import EnumType
 
 class CustomJSONEncoder(JSONEncoder):
 
@@ -87,9 +88,9 @@ class Token(db.Model):
         return result
 
 class ContentTypeEnum(enum.Enum):
-    movie = 1
-    show = 2
-    episode = 3
+    movie = "movie"
+    show = "show"
+    episode = "episode"
 
 uniqueid_to_content = db.Table('uniqueid_to_content',
     db.Column('uniqueid_id', db.Integer, db.ForeignKey('unique_id.id')),
@@ -120,7 +121,7 @@ class UniqueId(db.Model):
 class Content(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     json = db.Column(JsonEncodedDict)
-    contentType = db.Column(db.Enum(ContentTypeEnum))
+    contentType = db.Column(EnumType(ContentTypeEnum))
     update_date = db.Column(db.DateTime)
     watched = db.Column(db.Boolean)
     plays = db.Column(db.Integer)
