@@ -3,6 +3,7 @@
 from flask import Flask, jsonify, request, render_template, redirect
 from models import *
 from core import db
+import config
 import pprint
 from functools import wraps
 
@@ -64,7 +65,7 @@ def code():
     return jsonify({
         "device_code":token.access_token,
         "user_code": token.user_code,
-        "verification_url":"http://127.0.0.1:5000/register",
+        "verification_url":"%s/register"%(config.server_url),
         "expires_in":600,
         "interval":5
     })
@@ -366,10 +367,11 @@ def catch_all(path):
     app.logger.debug(request.json)
 
 if __name__ == '__main__':
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test.db'
+    app.config['SQLALCHEMY_DATABASE_URI'] = config.db_uri
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.json_encoder = CustomJSONEncoder
     db.init_app(app)
     with app.app_context():
-        db.drop_all()
+        # db.drop_all()
         db.create_all()
-        app.run(debug=True)
+        app.run(debug=config.debug)
