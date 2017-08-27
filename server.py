@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from flask import Flask, jsonify, request, render_template, redirect
+from flask import Flask, jsonify, request, render_template
 from models import *
 from core import db
 import config
@@ -58,11 +58,11 @@ def required_roles():
         return wrapped
     return wrapper
 @app.route('/register')
-def redirect_register():
-    return redirect("/static/register.html", code=302)
+def get_register():
+    return render_template("register.html")
 
 @app.route('/register', methods=['POST'])
-def register():
+def post_register():
     user_token = Token.query.filter_by(user_code=request.form['user_code']).first()
     if user_token:
         user_token.user = addUser(username=request.form['username'])
