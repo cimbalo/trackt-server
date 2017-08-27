@@ -13,10 +13,11 @@ def required_roles():
         @wraps(f)
         def wrapped(*args, **kwargs):
             try:
+                print(request.headers.get('Authorization'))
                 authorization = request.headers.get('Authorization').split(" ")[1]
                 user_token = Token.query.filter_by(access_token=authorization).first()
                 if not user_token:
-                    dsfsdf
+                    raise Exception
             except:
                 return "", 403
             return f(user_token, *args, **kwargs)
@@ -102,7 +103,7 @@ def device_token():
             return jsonify({
               "access_token": token.access_token,
               "token_type": "bearer",
-              "expires_in": 518400,
+              "expires_in": 7776000,
               "refresh_token": token.refresh_token,
               "scope": "public",
               "created_at": int(token.created_at.timestamp())
@@ -143,7 +144,7 @@ def refresh_token(user_token):
     return jsonify({
       "access_token": user_token.access_token,
       "token_type": "bearer",
-      "expires_in": 518400,
+      "expires_in": 7776000,
       "refresh_token": user_token.refresh_token,
       "scope": "public",
       "created_at": int(user_token.created_at.timestamp())
@@ -354,7 +355,6 @@ Catcha all other routes for debug purpose
 def catch_all(path):
     print("Unimplemented")
     pprint.pprint(request.json)
-    raise NotImplemented
 
 if __name__ == '__main__':
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test.db'
